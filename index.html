@@ -240,10 +240,28 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ frames })
                 });
-                const data = await response.json();
+                const responseText = await response.text();
+                const trimmedResponse = responseText.trim();
+                const looksLikeHtml = /^<!doctype\s+html|^<html\b/i.test(trimmedResponse);
+                let data;
+
+                if (!trimmedResponse || looksLikeHtml) {
+                    outputDiv.textContent = trimmedResponse || `Video analysis request failed (HTTP ${response.status}).`;
+                    return;
+                }
+
+                try {
+                    data = JSON.parse(trimmedResponse);
+                } catch {
+                    outputDiv.textContent = trimmedResponse;
+                    return;
+                }
 
                 if (!response.ok || data.error) {
-                    throw new Error(data.error || 'Video analysis request failed.');
+                    outputDiv.textContent = typeof data.error === 'string'
+                        ? data.error
+                        : trimmedResponse;
+                    return;
                 }
 
                 outputDiv.textContent = data.analysis || 'No analysis was returned.';
