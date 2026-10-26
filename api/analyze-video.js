@@ -10,6 +10,59 @@ const MAX_FRAMES = 18;
 const MAX_GEMINI_FRAMES = 8;
 const MAX_REQUEST_BODY_BYTES = 4_200_000;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const GEMINI_MODEL_CHAIN = ['gemini-2.5-pro', 'gemini-2.5-flash'];
+
+async function generateCoachingWithFallback(apiKey, parts) {
+    let lastError;
+
+    for (const model of GEMINI_MODEL_CHAIN) {
+        let response;
+        try {
+            response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+                method: 'POST',
+                headers: {
+                    'x-goog-api-key': apiKey,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    contents: [{ parts }],
+                    generationConfig: { temperature: 0.4, maxOutputTokens: 512 }
+                })
+            });
+        } catch (error) {
+            lastError = error;
+            console.warn(`Gemini model ${model} connection failed; trying the next model:`, error.message);
+            continue;
+        }
+
+        const responseText = await response.text();
+        let result;
+        try {
+            result = responseText ? JSON.parse(responseText) : {};
+        } catch {
+            throw new Error(`Gemini model ${model} returned an invalid response`);
+        }
+
+        if (!response.ok) {
+            const message = result.error?.message || `Gemini request failed (HTTP ${response.status})`;
+            lastError = new Error(message);
+            if (response.status === 429 || response.status === 503) {
+                console.warn(`Gemini model ${model} returned HTTP ${response.status}; trying the next model.`);
+                continue;
+            }
+            throw lastError;
+        }
+
+        const analysis = result.candidates?.[0]?.content?.parts
+            ?.map((part) => part.text || '')
+            .join('')
+            .trim();
+        if (!analysis) throw new Error(`Gemini model ${model} returned no coaching analysis`);
+        return analysis;
+    }
+
+    throw new Error(`All Gemini fallback models failed. Last error: ${lastError?.message || 'Unknown error'}`);
+}
 
 export default async function handler(req, res) {
     try {
@@ -28,14 +81,27 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'Request body must be a JSON object' });
         }
 
-        const { frames } = body;
+        const { frames, videoUrl } = body;
+        if (typeof videoUrl !== 'string' || videoUrl.length > 2048) {
+            return res.status(400).json({ error: 'A valid uploaded video URL is required' });
+        }
+        let parsedVideoUrl;
+        try {
+            parsedVideoUrl = new URL(videoUrl);
+        } catch {
+            return res.status(400).json({ error: 'The uploaded video URL is invalid' });
+        }
+        if (parsedVideoUrl.protocol !== 'https:') {
+            return res.status(400).json({ error: 'The uploaded video URL must use HTTPS' });
+        }
+
         if (!Array.isArray(frames) || frames.length === 0) {
             return res.status(400).json({ error: 'Provide sampled video frames in a frames array' });
         }
         if (frames.length > MAX_FRAMES) {
             return res.status(400).json({ error: `A maximum of ${MAX_FRAMES} sampled frames is allowed` });
         }
-        if (Buffer.byteLength(JSON.stringify({ frames }), 'utf8') > MAX_REQUEST_BODY_BYTES) {
+        if (Buffer.byteLength(JSON.stringify({ videoUrl, frames }), 'utf8') > MAX_REQUEST_BODY_BYTES) {
             return res.status(413).json({ error: 'Compressed frames exceed the single-request size limit' });
         }
 
@@ -63,42 +129,7 @@ export default async function handler(req, res) {
             parts.push({ inlineData: { mimeType: frame.mimeType, data: frame.data } });
         }
 
-        const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent', {
-            method: 'POST',
-            headers: {
-                'x-goog-api-key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                contents: [{ parts }],
-                generationConfig: { temperature: 0.4, maxOutputTokens: 512 }
-            })
-        });
-
-        const responseText = await geminiResponse.text();
-        let result;
-        try {
-            result = responseText ? JSON.parse(responseText) : {};
-        } catch {
-            console.error('Gemini returned a non-JSON response:', responseText);
-            return res.status(502).json({ error: 'Gemini returned an invalid response' });
-        }
-
-        if (!geminiResponse.ok) {
-            const message = result.error?.message || `Gemini request failed (HTTP ${geminiResponse.status})`;
-            return res.status(geminiResponse.status >= 400 && geminiResponse.status < 600 ? geminiResponse.status : 502).json({
-                error: typeof message === 'string' ? message : 'Gemini request failed'
-            });
-        }
-
-        const analysis = result.candidates?.[0]?.content?.parts
-            ?.map((part) => part.text || '')
-            .join('')
-            .trim();
-        if (!analysis) {
-            return res.status(502).json({ error: 'Gemini returned no coaching analysis' });
-        }
-
+        const analysis = await generateCoachingWithFallback(apiKey, parts);
         return res.status(200).json({ analysis });
     } catch (err) {
         console.error('Gemini video analysis error:', err);
