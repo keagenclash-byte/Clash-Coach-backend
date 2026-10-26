@@ -161,7 +161,7 @@
             });
         }
 
-        async function sampleVideoFrames(file) {
+        async function sampleVideoFrames(file, onBatch) {
             const video = document.createElement('video');
             const objectUrl = URL.createObjectURL(file);
             video.preload = 'auto';
@@ -188,7 +188,11 @@
                 const context = canvas.getContext('2d');
                 if (!context) throw new Error('Canvas is not available in this browser.');
 
-                const frames = [];
+                const batchSize = 12;
+                const totalFrames = Math.ceil(video.duration / 3);
+                const totalBatches = Math.ceil(totalFrames / batchSize);
+                let frames = [];
+                let batchIndex = 0;
                 for (let timestamp = 0; timestamp < video.duration; timestamp += 3) {
                     if (timestamp > 0) {
                         const seeked = waitForMediaEvent(video, 'seeked', 'Could not seek through the selected video.');
@@ -203,14 +207,20 @@
                         mimeType: 'image/jpeg',
                         data: dataUrl.slice(dataUrl.indexOf(',') + 1)
                     });
+
+                    if (frames.length === batchSize) {
+                        batchIndex += 1;
+                        await onBatch(frames, batchIndex, totalBatches);
+                        frames = [];
+                    }
                     await new Promise((resolve) => setTimeout(resolve, 25));
                 }
 
-                const encodedSize = frames.reduce((total, frame) => total + frame.data.length, 0);
-                if (encodedSize > 3_000_000) {
-                    throw new Error('Sampled frames are too large to send. Choose a shorter or lower-resolution clip.');
+                if (frames.length > 0) {
+                    batchIndex += 1;
+                    await onBatch(frames, batchIndex, totalBatches);
                 }
-                return frames;
+                return totalFrames;
             } finally {
                 video.removeAttribute('src');
                 video.load();
@@ -233,43 +243,47 @@
 
             try {
                 outputDiv.textContent = 'Sampling one frame every 3 seconds…';
-                const frames = await sampleVideoFrames(file);
-                outputDiv.textContent = `Sending ${frames.length} sampled frames for AI coaching…`;
-                const response = await fetch('/api/analyze-video', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ frames })
+                const analyses = [];
+                const totalFrames = await sampleVideoFrames(file, async (batchFrames, batchIndex, totalBatches) => {
+                    outputDiv.textContent = `Analyzing frame batch ${batchIndex} of ${totalBatches}…`;
+                    const response = await fetch('/api/analyze-video', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            frames: batchFrames,
+                            batchIndex,
+                            totalBatches
+                        })
+                    });
+                    const responseText = await response.text();
+                    const trimmedResponse = responseText.trim();
+                    const looksLikeHtml = /^<!doctype\s+html|^<html\b/i.test(trimmedResponse);
+                    let data;
+
+                    if (!trimmedResponse || looksLikeHtml) {
+                        throw new Error(trimmedResponse || `Video analysis request failed (HTTP ${response.status}).`);
+                    }
+
+                    try {
+                        data = JSON.parse(trimmedResponse);
+                    } catch {
+                        throw new Error(trimmedResponse);
+                    }
+
+                    if (!data || typeof data !== 'object') {
+                        throw new Error(trimmedResponse);
+                    }
+                    if (!response.ok || data.error) {
+                        throw new Error(typeof data.error === 'string' ? data.error : trimmedResponse);
+                    }
+
+                    analyses.push(`Batch ${batchIndex} (frames ${batchFrames[0].timestamp}s–${batchFrames[batchFrames.length - 1].timestamp}s)\n${data.analysis || 'No coaching tips returned for this batch.'}`);
+                    outputDiv.textContent = analyses.join('\n\n');
                 });
-                const responseText = await response.text();
-                const trimmedResponse = responseText.trim();
-                const looksLikeHtml = /^<!doctype\s+html|^<html\b/i.test(trimmedResponse);
-                let data;
 
-                if (!trimmedResponse || looksLikeHtml) {
-                    outputDiv.textContent = trimmedResponse || `Video analysis request failed (HTTP ${response.status}).`;
-                    return;
+                if (totalFrames === 0 || analyses.length === 0) {
+                    outputDiv.textContent = 'No frames were available to analyze.';
                 }
-
-                try {
-                    data = JSON.parse(trimmedResponse);
-                } catch {
-                    outputDiv.textContent = trimmedResponse;
-                    return;
-                }
-
-                if (!data || typeof data !== 'object') {
-                    outputDiv.textContent = trimmedResponse;
-                    return;
-                }
-
-                if (!response.ok || data.error) {
-                    outputDiv.textContent = typeof data.error === 'string'
-                        ? data.error
-                        : trimmedResponse;
-                    return;
-                }
-
-                outputDiv.textContent = data.analysis || 'No analysis was returned.';
             } catch (error) {
                 console.error('Video analysis error:', error);
                 outputDiv.textContent = error.message || 'Failed to analyze the video.';

@@ -8,8 +8,8 @@ export const config = {
     }
 };
 
-const MAX_FRAMES = 60;
-const MAX_TOTAL_IMAGE_BYTES = 3_000_000;
+const MAX_FRAMES_PER_BATCH = 12;
+const MAX_TOTAL_IMAGE_BYTES = 2_800_000;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_GEMINI_ATTEMPTS = 3;
 
@@ -46,12 +46,15 @@ export default async function handler(req, res) {
     }
 
     try {
-        const { frames } = req.body || {};
+        const { frames, batchIndex = 1, totalBatches = 1 } = req.body || {};
         if (!Array.isArray(frames) || frames.length === 0) {
             return res.status(400).json({ error: 'Provide sampled video frames in a frames array' });
         }
-        if (frames.length > MAX_FRAMES) {
-            return res.status(400).json({ error: `A maximum of ${MAX_FRAMES} sampled frames is allowed` });
+        if (frames.length > MAX_FRAMES_PER_BATCH) {
+            return res.status(400).json({ error: `Each request may contain no more than ${MAX_FRAMES_PER_BATCH} sampled frames` });
+        }
+        if (!Number.isInteger(batchIndex) || !Number.isInteger(totalBatches) || batchIndex < 1 || totalBatches < batchIndex) {
+            return res.status(400).json({ error: 'Batch index and total batches must be valid positive integers' });
         }
 
         let totalImageBytes = 0;
@@ -74,7 +77,7 @@ export default async function handler(req, res) {
             contents: [{
                 parts: [
                     {
-                        text: 'You are an expert Clash Royale tactical coach. The following images are sampled from a gameplay video at the indicated timestamps. Analyze only what is visible. Give concise, actionable feedback on opening plays and elixir management, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite timestamps where possible and state when details cannot be determined from the sampled frames.'
+                        text: `You are an expert Clash Royale tactical coach. This is batch ${batchIndex} of ${totalBatches} from a gameplay video; the client will combine coaching from all batches. The following images are sampled at the indicated timestamps. Analyze only what is visible in this segment. Give concise, actionable observations about elixir management, troop placement and spacing, and defensive trades. Cite timestamps where possible and state when details cannot be determined from the sampled frames. Avoid conclusions about parts of the match not shown in this batch.`
                     },
                     ...frames.flatMap((frame) => [
                         { text: `Gameplay frame at ${frame.timestamp} seconds:` },
