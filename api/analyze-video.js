@@ -6,36 +6,8 @@ export const config = {
     }
 };
 
-const MAX_FRAMES_PER_BATCH = 12;
-const MAX_TOTAL_IMAGE_BYTES = 2_800_000;
+const MAX_REQUEST_BODY_BYTES = 3_800_000;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const MAX_GEMINI_ATTEMPTS = 3;
-
-function isRetryableGeminiError(error) {
-    const status = Number(error?.status || error?.statusCode || error?.response?.status);
-    return !Number.isFinite(status) || status === 408 || status === 429 || status >= 500;
-}
-
-function getBase64ByteLength(data) {
-    const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
-    return Math.floor(data.length * 3 / 4) - padding;
-}
-
-async function generateContentWithRetry(ai, request) {
-    for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
-        try {
-            return await ai.models.generateContent(request);
-        } catch (error) {
-            if (attempt === MAX_GEMINI_ATTEMPTS || !isRetryableGeminiError(error)) {
-                throw error;
-            }
-
-            const delayMs = 250 * (2 ** (attempt - 1));
-            console.warn(`Gemini video analysis attempt ${attempt} failed; retrying in ${delayMs}ms`);
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-    }
-}
 
 export default async function handler(req, res) {
     try {
@@ -44,9 +16,9 @@ export default async function handler(req, res) {
             return res.status(405).json({ error: 'Method not allowed' });
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
+        const apiKey = process.env.GROQ_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key is not configured' });
+            return res.status(500).json({ error: 'Groq API key is not configured' });
         }
 
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -54,18 +26,14 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'Request body must be a JSON object' });
         }
 
-        const { frames, batchIndex = 1, totalBatches = 1 } = body;
+        const { frames } = body;
         if (!Array.isArray(frames) || frames.length === 0) {
             return res.status(400).json({ error: 'Provide sampled video frames in a frames array' });
         }
-        if (frames.length > MAX_FRAMES_PER_BATCH) {
-            return res.status(400).json({ error: `Each request may contain no more than ${MAX_FRAMES_PER_BATCH} sampled frames` });
-        }
-        if (!Number.isSafeInteger(batchIndex) || !Number.isSafeInteger(totalBatches) || batchIndex < 1 || totalBatches < batchIndex) {
-            return res.status(400).json({ error: 'Batch index and total batches must be valid positive integers' });
+        if (Buffer.byteLength(JSON.stringify({ frames }), 'utf8') > MAX_REQUEST_BODY_BYTES) {
+            return res.status(413).json({ error: 'Compressed frames exceed the single-request size limit' });
         }
 
-        let totalImageBytes = 0;
         for (const frame of frames) {
             if (!frame || typeof frame !== 'object' || Array.isArray(frame) || !Number.isFinite(frame.timestamp) || frame.timestamp < 0) {
                 return res.status(400).json({ error: 'Each frame must include a valid non-negative timestamp' });
@@ -73,32 +41,57 @@ export default async function handler(req, res) {
             if (!SUPPORTED_IMAGE_TYPES.has(frame.mimeType) || typeof frame.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(frame.data) || frame.data.length === 0) {
                 return res.status(400).json({ error: 'Each frame must contain a supported base64-encoded image' });
             }
-            totalImageBytes += getBase64ByteLength(frame.data);
-            if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
-                return res.status(413).json({ error: 'Sampled images exceed the per-batch image limit' });
-            }
         }
 
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey });
-        const result = await generateContentWithRetry(ai, {
-            model: 'gemini-3.8-flash',
-            contents: [{
-                parts: [
-                    {
-                        text: `You are an expert Clash Royale tactical coach. This is batch ${batchIndex} of ${totalBatches} from a gameplay video; the client will combine coaching from all batches. The following images are sampled at the indicated timestamps. Analyze only what is visible in this segment. Give concise, actionable observations about elixir management, troop placement and spacing, and defensive trades. Cite timestamps where possible and state when details cannot be determined from the sampled frames. Avoid conclusions about parts of the match not shown in this batch.`
-                    },
-                    ...frames.flatMap((frame) => [
-                        { text: `Gameplay frame at ${frame.timestamp} seconds:` },
-                        { inlineData: { mimeType: frame.mimeType, data: frame.data } }
-                    ])
-                ]
-            }]
+        const content = [{
+            type: 'text',
+            text: 'You are an expert Clash Royale tactical coach. Review these gameplay frames sampled every three seconds. Analyze only what is visible. Provide concise, actionable coaching on elixir management, card timing, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite frame timestamps where useful and note uncertainty when details are not visible.'
+        }];
+        for (const frame of frames) {
+            content.push({ type: 'text', text: `Gameplay frame at ${frame.timestamp} seconds:` });
+            content.push({
+                type: 'image_url',
+                image_url: { url: `data:${frame.mimeType};base64,${frame.data}` }
+            });
+        }
+
+        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'llama-3.2-11b-vision-preview',
+                messages: [{ role: 'user', content }],
+                temperature: 0.4
+            })
         });
 
-        return res.status(200).json({ analysis: result.text || 'No analysis was returned.' });
+        const responseText = await groqResponse.text();
+        let result;
+        try {
+            result = responseText ? JSON.parse(responseText) : {};
+        } catch {
+            console.error('Groq returned a non-JSON response:', responseText);
+            return res.status(502).json({ error: 'Groq returned an invalid response' });
+        }
+
+        if (!groqResponse.ok) {
+            const message = result.error?.message || result.error || `Groq request failed (HTTP ${groqResponse.status})`;
+            return res.status(groqResponse.status >= 400 && groqResponse.status < 600 ? groqResponse.status : 502).json({
+                error: typeof message === 'string' ? message : 'Groq request failed'
+            });
+        }
+
+        const analysis = result.choices?.[0]?.message?.content;
+        if (typeof analysis !== 'string' || !analysis.trim()) {
+            return res.status(502).json({ error: 'Groq returned no coaching analysis' });
+        }
+
+        return res.status(200).json({ analysis: analysis.trim() });
     } catch (err) {
-        console.error('Video analysis error:', err);
+        console.error('Groq video analysis error:', err);
         return res.status(500).json({ error: err?.message || String(err) });
     }
 }
