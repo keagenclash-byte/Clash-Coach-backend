@@ -7,6 +7,7 @@ export const config = {
 };
 
 const MAX_FRAMES = 18;
+const MAX_GEMINI_FRAMES = 8;
 const MAX_REQUEST_BODY_BYTES = 4_200_000;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -47,10 +48,17 @@ export default async function handler(req, res) {
             }
         }
 
+        const selectedFrames = frames.length <= MAX_GEMINI_FRAMES
+            ? frames
+            : Array.from({ length: MAX_GEMINI_FRAMES }, (_, index) => {
+                const sourceIndex = Math.round(index * (frames.length - 1) / (MAX_GEMINI_FRAMES - 1));
+                return frames[sourceIndex];
+            });
+
         const parts = [{
             text: 'You are an expert Clash Royale tactical coach. Review gameplay frames sampled evenly across the full video. Analyze only what is visible. Provide concise, actionable coaching on elixir management, card timing, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite frame timestamps where useful and note uncertainty when details are not visible.'
         }];
-        for (const frame of frames) {
+        for (const frame of selectedFrames) {
             parts.push({ text: `Gameplay frame at ${frame.timestamp} seconds:` });
             parts.push({ inlineData: { mimeType: frame.mimeType, data: frame.data } });
         }
@@ -63,7 +71,7 @@ export default async function handler(req, res) {
             },
             body: JSON.stringify({
                 contents: [{ parts }],
-                generationConfig: { temperature: 0.4 }
+                generationConfig: { temperature: 0.4, maxOutputTokens: 512 }
             })
         });
 
