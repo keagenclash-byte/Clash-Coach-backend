@@ -180,8 +180,8 @@
                     await waitForMediaEvent(video, 'loadeddata', 'Could not decode the selected video.');
                 }
 
-                const maxDimension = 480;
-                const scale = Math.min(1, maxDimension / Math.max(video.videoWidth, video.videoHeight));
+                const maxWidth = 640;
+                const scale = Math.min(1, maxWidth / video.videoWidth);
                 const canvas = document.createElement('canvas');
                 canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
                 canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
@@ -253,6 +253,11 @@
                 try {
                     data = JSON.parse(trimmedResponse);
                 } catch {
+                    outputDiv.textContent = trimmedResponse;
+                    return;
+                }
+
+                if (!data || typeof data !== 'object') {
                     outputDiv.textContent = trimmedResponse;
                     return;
                 }
