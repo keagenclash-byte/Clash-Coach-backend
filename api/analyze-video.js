@@ -11,6 +11,28 @@ export const config = {
 const MAX_FRAMES = 60;
 const MAX_TOTAL_IMAGE_BYTES = 3_000_000;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const MAX_GEMINI_ATTEMPTS = 3;
+
+function isRetryableGeminiError(error) {
+    const status = Number(error?.status || error?.statusCode || error?.response?.status);
+    return !Number.isFinite(status) || status === 408 || status === 429 || status >= 500;
+}
+
+async function generateContentWithRetry(ai, request) {
+    for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
+        try {
+            return await ai.models.generateContent(request);
+        } catch (error) {
+            if (attempt === MAX_GEMINI_ATTEMPTS || !isRetryableGeminiError(error)) {
+                throw error;
+            }
+
+            const delayMs = 250 * (2 ** (attempt - 1));
+            console.warn(`Gemini video analysis attempt ${attempt} failed; retrying in ${delayMs}ms`);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
+}
 
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
@@ -47,7 +69,7 @@ export default async function handler(req, res) {
         }
 
         const ai = new GoogleGenAI({ apiKey });
-        const result = await ai.models.generateContent({
+        const result = await generateContentWithRetry(ai, {
             model: 'gemini-3.8-flash',
             contents: [{
                 parts: [
