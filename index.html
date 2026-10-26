@@ -5,14 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clash Royale AI Coach & Battle Tracker</title>
     <style>
-        body { font-family: system-ui, sans-serif; background: #0f172a; color: #fff; padding: 20px; max-width: 650px; margin: auto; }
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #fff; padding: 20px; max-width: 760px; margin: auto; }
         .card { background: #1e293b; padding: 20px; border-radius: 12px; margin-top: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        input { padding: 10px; width: 60%; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; }
+        input { padding: 10px; width: min(60%, 360px); border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; }
         button { padding: 10px 15px; border-radius: 8px; border: none; background: #3b82f6; color: #fff; font-weight: bold; cursor: pointer; }
         button:hover { background: #2563eb; }
-        .battle-card { background: #0f172a; padding: 12px; border-radius: 8px; margin-top: 10px; border-left: 5px solid #64748b; }
+        button:disabled { opacity: 0.65; cursor: wait; }
+        .battle-list { display: grid; gap: 12px; }
+        .battle-card { background: #0f172a; padding: 16px; border-radius: 8px; border-left: 5px solid #64748b; }
         .win { border-left-color: #22c55e; }
         .loss { border-left-color: #ef4444; }
+        .draw { border-left-color: #eab308; }
+        .battle-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .battle-card p { margin: 8px 0; }
+        .match-meta { color: #94a3b8; font-size: 13px; }
+        .analysis-box { margin-top: 14px; padding: 14px; border: 1px solid #475569; border-radius: 8px; background: #172554; white-space: pre-wrap; line-height: 1.55; }
+        .analysis-box[hidden] { display: none; }
+        @media (max-width: 520px) { body { padding: 14px; } input { width: 100%; box-sizing: border-box; margin-bottom: 8px; } }
     </style>
 </head>
 <body>
@@ -35,7 +44,7 @@
     <!-- Battle Log Card -->
     <div class="card" id="battleLogCard" style="display:none;">
         <h3>Recent Battle Log</h3>
-        <div id="battleList">Loading matches...</div>
+        <div id="battleList" class="battle-list" aria-live="polite">Loading matches...</div>
     </div>
 
     <script>
@@ -51,59 +60,86 @@
             document.getElementById('battleList').innerText = "Loading matches...";
 
             try {
-                const [profileRes, battleRes] = await Promise.all([
-                    fetch(`/api/proxy?tag=${cleanTag}`),
-                    fetch(`/api/proxy?tag=${cleanTag}&endpoint=battlelog`)
-                ]);
+                const response = await fetch(`/api/proxy?tag=${encodeURIComponent(cleanTag)}`);
+                if (!response.ok) throw new Error('Unable to load player data. Check the player tag and API configuration.');
+                const playerData = await response.json();
+                const profileData = playerData.profile;
+                const battles = playerData.battleLog;
 
-                if (profileRes.ok) {
-                    const profileData = await profileRes.json();
-                    document.getElementById('playerName').innerText = profileData.name || "Unknown Player";
-                    document.getElementById('playerTrophies').innerText = profileData.trophies || "N/A";
-                    document.getElementById('playerWins').innerText = profileData.wins || "0";
-                    document.getElementById('playerLosses').innerText = profileData.losses || "0";
-                } else {
-                    document.getElementById('playerName').innerText = "Error loading profile";
+                document.getElementById('playerName').innerText = profileData?.name || "Unknown Player";
+                document.getElementById('playerTrophies').innerText = profileData?.trophies ?? "N/A";
+                document.getElementById('playerWins').innerText = profileData?.wins ?? "0";
+                document.getElementById('playerLosses').innerText = profileData?.losses ?? "0";
+
+                const listContainer = document.getElementById('battleList');
+                listContainer.replaceChildren();
+
+                if (!Array.isArray(battles) || battles.length === 0) {
+                    listContainer.innerText = "No recent battles found.";
+                    return;
                 }
 
-                if (battleRes.ok) {
-                    const battles = await battleRes.json();
-                    const listContainer = document.getElementById('battleList');
-                    listContainer.innerHTML = '';
+                battles.slice(0, 10).forEach((match, index) => {
+                    const team = match.team?.[0] || { crowns: 0 };
+                    const opponent = match.opponent?.[0] || { crowns: 0 };
+                    const teamCrowns = team.crowns ?? 0;
+                    const opponentCrowns = opponent.crowns ?? 0;
+                    const result = teamCrowns > opponentCrowns ? 'VICTORY' : teamCrowns < opponentCrowns ? 'DEFEAT' : 'DRAW';
+                    const resultClass = result.toLowerCase();
 
-                    if (!Array.isArray(battles) || battles.length === 0) {
-                        listContainer.innerHTML = '<p>No recent battles found.</p>';
-                        return;
-                    }
+                    const matchCard = document.createElement('article');
+                    matchCard.className = `battle-card ${resultClass}`;
+                    const heading = document.createElement('div');
+                    heading.className = 'battle-heading';
+                    const title = document.createElement('strong');
+                    title.textContent = `#${index + 1} · ${match.type || 'Match'} · ${result}`;
+                    const analyzeButton = document.createElement('button');
+                    analyzeButton.type = 'button';
+                    analyzeButton.textContent = 'Analyze this match';
 
-                    battles.slice(0, 5).forEach((match, index) => {
-                        const type = match.type || 'Match';
-                        const team = match.team && match.team[0] ? match.team[0] : { crowns: 0 };
-                        const opponent = match.opponent && match.opponent[0] ? match.opponent[0] : { crowns: 0 };
-                        
-                        const teamCrowns = team.crowns || 0;
-                        const oppCrowns = opponent.crowns || 0;
-                        
-                        let isWin = teamCrowns > oppCrowns;
-                        let resultClass = isWin ? 'win' : 'loss';
-                        let resultText = isWin ? 'VICTORY 🟢' : 'DEFEAT 🔴';
+                    const score = document.createElement('p');
+                    score.textContent = `Crowns: You ${teamCrowns} – Opponent ${opponentCrowns}`;
+                    const opponentLine = document.createElement('p');
+                    opponentLine.className = 'match-meta';
+                    opponentLine.textContent = `Opponent: ${opponent.name || 'Unknown'}`;
+                    const analysisBox = document.createElement('div');
+                    analysisBox.className = 'analysis-box';
+                    analysisBox.hidden = true;
+                    analysisBox.setAttribute('role', 'status');
 
-                        const matchDiv = document.createElement('div');
-                        matchDiv.className = `battle-card ${resultClass}`;
-                        matchDiv.innerHTML = `
-                            <strong>#${index + 1} - ${type.toUpperCase()} (${resultText})</strong>
-                            <p>Crowns: You (${teamCrowns}) - Opponent (${oppCrowns})</p>
-                            <p style="font-size: 12px; color: #94a3b8;">Opponent: ${opponent.name || 'Unknown'}</p>
-                        `;
-                        listContainer.appendChild(matchDiv);
-                    });
-                } else {
-                    document.getElementById('battleList').innerText = "Error loading battle log.";
-                }
+                    analyzeButton.addEventListener('click', () => analyzeMatch(match, profileData, analyzeButton, analysisBox));
+                    heading.append(title, analyzeButton);
+                    matchCard.append(heading, score, opponentLine, analysisBox);
+                    listContainer.appendChild(matchCard);
+                });
 
             } catch (err) {
                 console.error(err);
-                alert("Network error connecting to proxy.");
+                document.getElementById('playerName').innerText = "Unable to load player data";
+                document.getElementById('battleList').innerText = err.message || "Network error connecting to proxy.";
+            }
+        }
+
+        async function analyzeMatch(match, profile, button, resultBox) {
+            button.disabled = true;
+            button.textContent = 'Analyzing…';
+            resultBox.hidden = false;
+            resultBox.textContent = 'Your tactical coach is reviewing this match…';
+
+            try {
+                const response = await fetch('/api/proxy?type=analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profile, battleLog: match })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Analysis request failed.');
+                resultBox.textContent = data.analysis || 'No coaching tips were returned.';
+            } catch (error) {
+                resultBox.textContent = error.message || 'Could not get match analysis. Please try again.';
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Analyze this match';
             }
         }
     </script>
