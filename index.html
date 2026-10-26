@@ -154,6 +154,74 @@
             }
         }
 
+        function waitForMediaEvent(video, eventName, errorMessage) {
+            return new Promise((resolve, reject) => {
+                video.addEventListener(eventName, resolve, { once: true });
+                video.addEventListener('error', () => reject(new Error(errorMessage)), { once: true });
+            });
+        }
+
+        async function sampleVideoFrames(file) {
+            const video = document.createElement('video');
+            const objectUrl = URL.createObjectURL(file);
+            video.preload = 'auto';
+            video.muted = true;
+            video.playsInline = true;
+            const metadataLoaded = waitForMediaEvent(video, 'loadedmetadata', 'Could not read this video file.');
+            video.src = objectUrl;
+
+            try {
+                await metadataLoaded;
+                if (!Number.isFinite(video.duration) || video.duration <= 0) {
+                    throw new Error('The selected video has no readable duration.');
+                }
+
+                const frameCount = Math.ceil(video.duration / 3);
+                if (frameCount > 60) {
+                    throw new Error('Please choose a video that is 180 seconds or shorter.');
+                }
+
+                if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+                    await waitForMediaEvent(video, 'loadeddata', 'Could not decode the selected video.');
+                }
+
+                const maxDimension = 480;
+                const scale = Math.min(1, maxDimension / Math.max(video.videoWidth, video.videoHeight));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+                canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+                const context = canvas.getContext('2d');
+                if (!context) throw new Error('Canvas is not available in this browser.');
+
+                const frames = [];
+                for (let timestamp = 0; timestamp < video.duration; timestamp += 3) {
+                    if (timestamp > 0) {
+                        const seeked = waitForMediaEvent(video, 'seeked', 'Could not seek through the selected video.');
+                        video.currentTime = timestamp;
+                        await seeked;
+                    }
+
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                    frames.push({
+                        timestamp,
+                        mimeType: 'image/jpeg',
+                        data: dataUrl.slice(dataUrl.indexOf(',') + 1)
+                    });
+                }
+
+                const encodedSize = frames.reduce((total, frame) => total + frame.data.length, 0);
+                if (encodedSize > 3_000_000) {
+                    throw new Error('Sampled frames are too large to send. Choose a shorter or lower-resolution clip.');
+                }
+                return frames;
+            } finally {
+                video.removeAttribute('src');
+                video.load();
+                URL.revokeObjectURL(objectUrl);
+            }
+        }
+
         document.getElementById('analyzeVideoBtn').addEventListener('click', async () => {
             const fileInput = document.getElementById('videoInput');
             const outputDiv = document.getElementById('videoAnalysisOutput');
@@ -165,16 +233,16 @@
                 return;
             }
 
-            outputDiv.textContent = 'Uploading and analyzing video... This may take a few seconds ⏳';
             analyzeButton.disabled = true;
 
-            const formData = new FormData();
-            formData.append('video', file);
-
             try {
+                outputDiv.textContent = 'Sampling one frame every 3 seconds…';
+                const frames = await sampleVideoFrames(file);
+                outputDiv.textContent = `Sending ${frames.length} sampled frames for AI coaching…`;
                 const response = await fetch('/api/analyze-video', {
                     method: 'POST',
-                    body: formData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ frames })
                 });
                 const data = await response.json();
 
@@ -185,7 +253,7 @@
                 outputDiv.textContent = data.analysis || 'No analysis was returned.';
             } catch (error) {
                 console.error('Video analysis error:', error);
-                outputDiv.textContent = error.message || 'Failed to connect to backend endpoint.';
+                outputDiv.textContent = error.message || 'Failed to analyze the video.';
             } finally {
                 analyzeButton.disabled = false;
             }
