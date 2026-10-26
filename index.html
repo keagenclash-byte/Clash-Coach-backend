@@ -47,6 +47,17 @@
         <div id="battleList" class="battle-list" aria-live="polite">Loading matches...</div>
     </div>
 
+    <!-- Gameplay Video Upload Section -->
+    <div class="card" style="margin-top: 20px;">
+        <h2>Upload Gameplay Video for AI Coaching</h2>
+        <p>Select a video clip of your battle to get frame-by-frame analysis.</p>
+
+        <input type="file" id="videoInput" accept="video/*" style="margin-bottom: 10px; display: block;" />
+        <button id="analyzeVideoBtn" class="btn">Analyze Video Gameplay</button>
+
+        <div id="videoAnalysisOutput" style="margin-top: 15px; white-space: pre-wrap; font-family: inherit;"></div>
+    </div>
+
     <script>
         async function loadAllData() {
             const rawTag = document.getElementById('tagInput').value.trim();
@@ -142,6 +153,43 @@
                 button.textContent = 'Analyze this match';
             }
         }
+
+        document.getElementById('analyzeVideoBtn').addEventListener('click', async () => {
+            const fileInput = document.getElementById('videoInput');
+            const outputDiv = document.getElementById('videoAnalysisOutput');
+            const analyzeButton = document.getElementById('analyzeVideoBtn');
+            const file = fileInput.files?.[0];
+
+            if (!file) {
+                alert('Please select a gameplay video first!');
+                return;
+            }
+
+            outputDiv.textContent = 'Uploading and analyzing video... This may take a few seconds ⏳';
+            analyzeButton.disabled = true;
+
+            const formData = new FormData();
+            formData.append('video', file);
+
+            try {
+                const response = await fetch('/api/analyze-video', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (!response.ok || data.error) {
+                    throw new Error(data.error || 'Video analysis request failed.');
+                }
+
+                outputDiv.textContent = data.analysis || 'No analysis was returned.';
+            } catch (error) {
+                console.error('Video analysis error:', error);
+                outputDiv.textContent = error.message || 'Failed to connect to backend endpoint.';
+            } finally {
+                analyzeButton.disabled = false;
+            }
+        });
     </script>
 </body>
 </html>

@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "formidable": "^3.5.2"
+  }
+}
