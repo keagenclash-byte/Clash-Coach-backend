@@ -35,17 +35,17 @@ async function generateContentWithRetry(ai, request) {
 }
 
 export default async function handler(req, res) {
-    if (req.method !== 'POST') {
-        res.setHeader('Allow', 'POST');
-        return res.status(405).json({ error: 'Method not allowed' });
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        return res.status(500).json({ error: 'Gemini API key is not configured' });
-    }
-
     try {
+        if (req.method !== 'POST') {
+            res.setHeader('Allow', 'POST');
+            return res.status(405).json({ error: 'Method not allowed' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key is not configured' });
+        }
+
         const { frames, batchIndex = 1, totalBatches = 1 } = req.body || {};
         if (!Array.isArray(frames) || frames.length === 0) {
             return res.status(400).json({ error: 'Provide sampled video frames in a frames array' });
@@ -88,8 +88,8 @@ export default async function handler(req, res) {
         });
 
         return res.status(200).json({ analysis: result.text || 'No analysis was returned.' });
-    } catch (error) {
-        console.error('Video analysis error:', error);
-        return res.status(500).json({ error: 'Failed to analyze the sampled video frames' });
+    } catch (err) {
+        console.error('Video analysis error:', err);
+        return res.status(500).json({ error: err?.message || String(err) });
     }
 }
