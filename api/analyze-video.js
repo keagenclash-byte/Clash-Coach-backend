@@ -47,13 +47,10 @@ export default async function handler(req, res) {
             }
         }
 
-        const content = [{
-            type: 'text',
-            text: 'You are an expert Clash Royale tactical coach. Review these gameplay frames sampled evenly across the full video. Analyze only what is visible. Provide concise, actionable coaching on elixir management, card timing, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite frame timestamps where useful and note uncertainty when details are not visible.'
-        }];
+        const userContent = [];
         for (const frame of frames) {
-            content.push({ type: 'text', text: `Gameplay frame at ${frame.timestamp} seconds:` });
-            content.push({
+            userContent.push({ type: 'text', text: `Gameplay frame at ${frame.timestamp} seconds:` });
+            userContent.push({
                 type: 'image_url',
                 image_url: { url: `data:${frame.mimeType};base64,${frame.data}` }
             });
@@ -66,8 +63,14 @@ export default async function handler(req, res) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: 'openai/gpt-oss-120b',
-                messages: [{ role: 'user', content }],
+                model: 'llama-3.2-11b-vision-preview',
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert Clash Royale tactical coach. Review gameplay frames sampled evenly across the full video. Analyze only what is visible. Provide concise, actionable coaching on elixir management, card timing, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite frame timestamps where useful and note uncertainty when details are not visible.'
+                    },
+                    { role: 'user', content: userContent }
+                ],
                 temperature: 0.4
             })
         });
