@@ -72,10 +72,10 @@ export default async function handler(req, res) {
         const formattedTag = playerTag.startsWith('#') ? playerTag : `#${playerTag}`;
         const encodedTag = encodeURIComponent(formattedTag);
         const [profileRes, battleRes] = await Promise.all([
-            fetch(`https://api.clashroyale.com/v1/players/${encodedTag}`, {
+            fetch(`https://proxy.royaleapi.dev/v1/players/${encodedTag}`, {
                 headers: { Authorization: `Bearer ${token}` }
             }),
-            fetch(`https://api.clashroyale.com/v1/players/${encodedTag}/battlelog`, {
+            fetch(`https://proxy.royaleapi.dev/v1/players/${encodedTag}/battlelog`, {
                 headers: { Authorization: `Bearer ${token}` }
             })
         ]);
