@@ -1,5 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
-
 export const config = {
     api: {
         bodyParser: {
@@ -16,6 +14,11 @@ const MAX_GEMINI_ATTEMPTS = 3;
 function isRetryableGeminiError(error) {
     const status = Number(error?.status || error?.statusCode || error?.response?.status);
     return !Number.isFinite(status) || status === 408 || status === 429 || status >= 500;
+}
+
+function getBase64ByteLength(data) {
+    const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+    return Math.floor(data.length * 3 / 4) - padding;
 }
 
 async function generateContentWithRetry(ai, request) {
@@ -46,31 +49,37 @@ export default async function handler(req, res) {
             return res.status(500).json({ error: 'Gemini API key is not configured' });
         }
 
-        const { frames, batchIndex = 1, totalBatches = 1 } = req.body || {};
+        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return res.status(400).json({ error: 'Request body must be a JSON object' });
+        }
+
+        const { frames, batchIndex = 1, totalBatches = 1 } = body;
         if (!Array.isArray(frames) || frames.length === 0) {
             return res.status(400).json({ error: 'Provide sampled video frames in a frames array' });
         }
         if (frames.length > MAX_FRAMES_PER_BATCH) {
             return res.status(400).json({ error: `Each request may contain no more than ${MAX_FRAMES_PER_BATCH} sampled frames` });
         }
-        if (!Number.isInteger(batchIndex) || !Number.isInteger(totalBatches) || batchIndex < 1 || totalBatches < batchIndex) {
+        if (!Number.isSafeInteger(batchIndex) || !Number.isSafeInteger(totalBatches) || batchIndex < 1 || totalBatches < batchIndex) {
             return res.status(400).json({ error: 'Batch index and total batches must be valid positive integers' });
         }
 
         let totalImageBytes = 0;
         for (const frame of frames) {
-            if (!frame || !Number.isFinite(frame.timestamp) || frame.timestamp < 0) {
+            if (!frame || typeof frame !== 'object' || Array.isArray(frame) || !Number.isFinite(frame.timestamp) || frame.timestamp < 0) {
                 return res.status(400).json({ error: 'Each frame must include a valid non-negative timestamp' });
             }
-            if (!SUPPORTED_IMAGE_TYPES.has(frame.mimeType) || typeof frame.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(frame.data)) {
+            if (!SUPPORTED_IMAGE_TYPES.has(frame.mimeType) || typeof frame.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(frame.data) || frame.data.length === 0) {
                 return res.status(400).json({ error: 'Each frame must contain a supported base64-encoded image' });
             }
-            totalImageBytes += Math.floor(frame.data.length * 3 / 4);
+            totalImageBytes += getBase64ByteLength(frame.data);
             if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
-                return res.status(413).json({ error: 'Sampled images exceed the 3 MB limit' });
+                return res.status(413).json({ error: 'Sampled images exceed the per-batch image limit' });
             }
         }
 
+        const { GoogleGenAI } = await import('@google/genai');
         const ai = new GoogleGenAI({ apiKey });
         const result = await generateContentWithRetry(ai, {
             model: 'gemini-3.8-flash',
