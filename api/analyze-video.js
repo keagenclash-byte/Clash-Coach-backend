@@ -55,7 +55,7 @@ export default async function handler(req, res) {
             parts.push({ inlineData: { mimeType: frame.mimeType, data: frame.data } });
         }
 
-        const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+        const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent', {
             method: 'POST',
             headers: {
                 'x-goog-api-key': apiKey,
