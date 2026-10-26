@@ -63,7 +63,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Player tag is required' });
     }
 
-    const token = process.env.CLASH_ROYALE_TOKEN;
+    const token = process.env.SUPERCELL_API_KEY;
     if (!token) {
         return res.status(500).json({ error: 'Clash Royale API token is not configured on Vercel' });
     }
