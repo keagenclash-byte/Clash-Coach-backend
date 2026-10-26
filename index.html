@@ -176,11 +176,6 @@
                     throw new Error('The selected video has no readable duration.');
                 }
 
-                const frameCount = Math.ceil(video.duration / 3);
-                if (frameCount > 60) {
-                    throw new Error('Please choose a video that is 180 seconds or shorter.');
-                }
-
                 if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
                     await waitForMediaEvent(video, 'loadeddata', 'Could not decode the selected video.');
                 }
