@@ -208,6 +208,7 @@
                         mimeType: 'image/jpeg',
                         data: dataUrl.slice(dataUrl.indexOf(',') + 1)
                     });
+                    await new Promise((resolve) => setTimeout(resolve, 25));
                 }
 
                 const encodedSize = frames.reduce((total, frame) => total + frame.data.length, 0);
