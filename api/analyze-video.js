@@ -1,12 +1,13 @@
 export const config = {
     api: {
         bodyParser: {
-            sizeLimit: '4mb'
+            sizeLimit: '4.2mb'
         }
     }
 };
 
-const MAX_REQUEST_BODY_BYTES = 3_800_000;
+const MAX_FRAMES = 18;
+const MAX_REQUEST_BODY_BYTES = 4_200_000;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 export default async function handler(req, res) {
@@ -30,6 +31,9 @@ export default async function handler(req, res) {
         if (!Array.isArray(frames) || frames.length === 0) {
             return res.status(400).json({ error: 'Provide sampled video frames in a frames array' });
         }
+        if (frames.length > MAX_FRAMES) {
+            return res.status(400).json({ error: `A maximum of ${MAX_FRAMES} sampled frames is allowed` });
+        }
         if (Buffer.byteLength(JSON.stringify({ frames }), 'utf8') > MAX_REQUEST_BODY_BYTES) {
             return res.status(413).json({ error: 'Compressed frames exceed the single-request size limit' });
         }
@@ -45,7 +49,7 @@ export default async function handler(req, res) {
 
         const content = [{
             type: 'text',
-            text: 'You are an expert Clash Royale tactical coach. Review these gameplay frames sampled every three seconds. Analyze only what is visible. Provide concise, actionable coaching on elixir management, card timing, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite frame timestamps where useful and note uncertainty when details are not visible.'
+            text: 'You are an expert Clash Royale tactical coach. Review these gameplay frames sampled evenly across the full video. Analyze only what is visible. Provide concise, actionable coaching on elixir management, card timing, troop placement and spacing, defensive trades, and the top three improvements for the next match. Cite frame timestamps where useful and note uncertainty when details are not visible.'
         }];
         for (const frame of frames) {
             content.push({ type: 'text', text: `Gameplay frame at ${frame.timestamp} seconds:` });
