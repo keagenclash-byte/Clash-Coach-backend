@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clash Royale AI Coach & Battle Tracker</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #fff; padding: 20px; max-width: 650px; margin: auto; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; margin-top: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        input { padding: 10px; width: 60%; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; }
+        button { padding: 10px 15px; border-radius: 8px; border: none; background: #3b82f6; color: #fff; font-weight: bold; cursor: pointer; }
+        button:hover { background: #2563eb; }
+        .battle-card { background: #0f172a; padding: 12px; border-radius: 8px; margin-top: 10px; border-left: 5px solid #64748b; }
+        .win { border-left-color: #22c55e; }
+        .loss { border-left-color: #ef4444; }
+    </style>
+</head>
+<body>
+
+    <h2>Clash Royale AI Coach Tracker</h2>
+    <p>Enter your player tag to load profile stats and recent battle logs:</p>
+    
+    <div>
+        <input type="text" id="tagInput" placeholder="e.g. 8C28YL92" value="8C28YL92">
+        <button onclick="loadAllData()">Track & Analyze</button>
+    </div>
+
+    <!-- Profile Stat Card -->
+    <div class="card" id="profileCard" style="display:none;">
+        <h3 id="playerName">Loading profile...</h3>
+        <p><strong>Trophies:</strong> <span id="playerTrophies">-</span></p>
+        <p><strong>Wins:</strong> <span id="playerWins">-</span> | <strong>Losses:</strong> <span id="playerLosses">-</span></p>
+    </div>
+
+    <!-- Battle Log Card -->
+    <div class="card" id="battleLogCard" style="display:none;">
+        <h3>Recent Battle Log</h3>
+        <div id="battleList">Loading matches...</div>
+    </div>
+
+    <script>
+        async function loadAllData() {
+            const rawTag = document.getElementById('tagInput').value.trim();
+            const cleanTag = rawTag.replace('#', '');
+            
+            if (!cleanTag) return alert("Please enter a player tag!");
+
+            document.getElementById('profileCard').style.display = "block";
+            document.getElementById('battleLogCard').style.display = "block";
+            document.getElementById('playerName').innerText = "Loading profile...";
+            document.getElementById('battleList').innerText = "Loading matches...";
+
+            try {
+                const [profileRes, battleRes] = await Promise.all([
+                    fetch(`/api/proxy?tag=${cleanTag}`),
+                    fetch(`/api/proxy?tag=${cleanTag}&endpoint=battlelog`)
+                ]);
+
+                if (profileRes.ok) {
+                    const profileData = await profileRes.json();
+                    document.getElementById('playerName').innerText = profileData.name || "Unknown Player";
+                    document.getElementById('playerTrophies').innerText = profileData.trophies || "N/A";
+                    document.getElementById('playerWins').innerText = profileData.wins || "0";
+                    document.getElementById('playerLosses').innerText = profileData.losses || "0";
+                } else {
+                    document.getElementById('playerName').innerText = "Error loading profile";
+                }
+
+                if (battleRes.ok) {
+                    const battles = await battleRes.json();
+                    const listContainer = document.getElementById('battleList');
+                    listContainer.innerHTML = '';
+
+                    if (!Array.isArray(battles) || battles.length === 0) {
+                        listContainer.innerHTML = '<p>No recent battles found.</p>';
+                        return;
+                    }
+
+                    battles.slice(0, 5).forEach((match, index) => {
+                        const type = match.type || 'Match';
+                        const team = match.team && match.team[0] ? match.team[0] : { crowns: 0 };
+                        const opponent = match.opponent && match.opponent[0] ? match.opponent[0] : { crowns: 0 };
+                        
+                        const teamCrowns = team.crowns || 0;
+                        const oppCrowns = opponent.crowns || 0;
+                        
+                        let isWin = teamCrowns > oppCrowns;
+                        let resultClass = isWin ? 'win' : 'loss';
+                        let resultText = isWin ? 'VICTORY 🟢' : 'DEFEAT 🔴';
+
+                        const matchDiv = document.createElement('div');
+                        matchDiv.className = `battle-card ${resultClass}`;
+                        matchDiv.innerHTML = `
+                            <strong>#${index + 1} - ${type.toUpperCase()} (${resultText})</strong>
+                            <p>Crowns: You (${teamCrowns}) - Opponent (${oppCrowns})</p>
+                            <p style="font-size: 12px; color: #94a3b8;">Opponent: ${opponent.name || 'Unknown'}</p>
+                        `;
+                        listContainer.appendChild(matchDiv);
+                    });
+                } else {
+                    document.getElementById('battleList').innerText = "Error loading battle log.";
+                }
+
+            } catch (err) {
+                console.error(err);
+                alert("Network error connecting to proxy.");
+            }
+        }
+    </script>
+</body>
+</html>
